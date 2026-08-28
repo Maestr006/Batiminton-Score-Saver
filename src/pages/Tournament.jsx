@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useGroup } from '../context/GroupContext'
-import { randomizeTeams, pairTeamsIntoMatches } from '../lib/teamRandomizer'
+import { pairTeamsIntoMatches } from '../lib/teamRandomizer'
+import { fetchFairnessData, assignFairTeams } from '../lib/fairTeams'
 
 export default function Tournament() {
   const { currentGroup } = useGroup()
@@ -15,9 +16,9 @@ export default function Tournament() {
   const [tournamentName, setTournamentName] = useState('')
   const [format, setFormat] = useState('random') // 'random' | 'playoffs'
   const [teams, setTeams] = useState(null) // null until randomized
-  const [teamBye, setTeamBye] = useState(null) // leftover odd team, sits out this round
-  const [playerBye, setPlayerBye] = useState([]) // leftover odd player(s), sit out this round
+  const [benched, setBenched] = useState([]) // players sitting out this tournament
   const [creating, setCreating] = useState(false)
+  const [randomizing, setRandomizing] = useState(false)
   const [error, setError] = useState('')
   const [showWizard, setShowWizard] = useState(false)
 
@@ -48,8 +49,7 @@ export default function Tournament() {
       return next
     })
     setTeams(null)
-    setTeamBye(null)
-    setPlayerBye([])
+    setBenched([])
   }
 
   async function addPlayer(e) {
@@ -67,23 +67,44 @@ export default function Tournament() {
     }
   }
 
-  function handleRandomize() {
+  async function handleRandomize() {
     const chosen = players.filter((p) => selected.has(p.player_id))
     if (chosen.length < 4) {
       setError('Select at least 4 players to form two teams.')
       return
     }
     setError('')
-    const { teams: generatedTeams, playerBye: leftoverPlayers } = randomizeTeams(chosen, 2)
+    setRandomizing(true)
+    const { gamesPlayed, partnerCounts } = await fetchFairnessData(supabase, currentGroup.group_id)
+    const { teams: generatedTeams, benched: benchedPlayers } = assignFairTeams(
+      chosen,
+      gamesPlayed,
+      partnerCounts
+    )
+    setRandomizing(false)
+
     if (generatedTeams.length < 2) {
       setError('Not enough players left to form two teams after byes — select a few more.')
       setTeams(null)
       return
     }
     setTeams(generatedTeams)
-    setPlayerBye(leftoverPlayers)
-    const { bye: byeTeam } = pairTeamsIntoMatches(generatedTeams)
-    setTeamBye(byeTeam)
+    setBenched(benchedPlayers)
+  }
+
+  function swapIn(benchedPlayer, playingPlayerId) {
+    let outgoing = null
+    const newTeams = teams.map((team) => {
+      const idx = team.findIndex((p) => p.player_id === playingPlayerId)
+      if (idx === -1) return team
+      outgoing = team[idx]
+      const copy = [...team]
+      copy[idx] = benchedPlayer
+      return copy
+    })
+    if (!outgoing) return
+    setTeams(newTeams)
+    setBenched((prev) => prev.filter((p) => p.player_id !== benchedPlayer.player_id).concat(outgoing))
   }
 
   async function handleCreateTournament() {
@@ -92,7 +113,7 @@ export default function Tournament() {
     setError('')
 
     const { matches: pairedMatches } = pairTeamsIntoMatches(teams)
-    const byeIds = [...playerBye, ...(teamBye || [])].map((p) => p.player_id)
+    const byeIds = benched.map((p) => p.player_id)
 
     const { data: tournament, error: tErr } = await supabase
       .from('tournaments')
@@ -218,8 +239,8 @@ export default function Tournament() {
 
           {error && <p className="text-sm text-red-600">{error}</p>}
 
-          <button className="btn-accent w-full" onClick={handleRandomize}>
-            🎲 Randomize Teams ({selected.size} selected)
+          <button className="btn-accent w-full" onClick={handleRandomize} disabled={randomizing}>
+            {randomizing ? 'Balancing teams…' : `🎲 Randomize Teams (${selected.size} selected)`}
           </button>
 
           {teams && (
@@ -235,15 +256,29 @@ export default function Tournament() {
                   </div>
                 ))}
               </div>
-              {teamBye && (
-                <p className="mt-3 text-sm text-ink/50">
-                  Team bye this round: {teamBye.map((p) => p.name).join(' + ')}
-                </p>
-              )}
-              {playerBye.length > 0 && (
-                <p className="mt-1 text-sm text-ink/50">
-                  Player bye this round: {playerBye.map((p) => p.name).join(', ')}
-                </p>
+              {benched.length > 0 && (
+                <div className="mt-3 space-y-1.5">
+                  <p className="text-sm text-ink/50">
+                    Not playing this tournament — auto-picked for fair rotation:
+                  </p>
+                  <ul className="space-y-1.5">
+                    {benched.map((p) => (
+                      <li key={p.player_id} className="flex items-center justify-between gap-2 text-sm">
+                        <span>{p.name}</span>
+                        <select
+                          className="input !w-auto !py-1 text-xs"
+                          value=""
+                          onChange={(e) => { if (e.target.value) swapIn(p, e.target.value) }}
+                        >
+                          <option value="">Swap in for…</option>
+                          {teams.flat().map((pl) => (
+                            <option key={pl.player_id} value={pl.player_id}>{pl.name}</option>
+                          ))}
+                        </select>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               <button
                 className="btn-primary mt-4 w-full"
