@@ -74,33 +74,60 @@ export default function TournamentDetail() {
       <Link to="/tournament" className="text-sm text-court hover:underline">← Back to tournaments</Link>
       <div className="mt-2 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{tournament.name}</h1>
-        <span
-          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-            tournament.status === 'completed' ? 'bg-ink/10 text-ink/50' : 'bg-court/10 text-court'
-          }`}
-        >
-          {tournament.status}
-        </span>
+        <div className="flex items-center gap-2">
+          {isPlayoffs && (
+            <span className="rounded-full bg-cork/10 px-2.5 py-1 text-xs font-semibold text-cork-dark">
+              🏆 Playoffs
+            </span>
+          )}
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              tournament.status === 'completed' ? 'bg-ink/10 text-ink/50' : 'bg-court/10 text-court'
+            }`}
+          >
+            {tournament.status}
+          </span>
+        </div>
       </div>
+      <p className="mt-1 text-xs text-ink/40">
+        {tournament.court_count} court{tournament.court_count === 1 ? '' : 's'} available
+      </p>
 
       <div className="mt-6 space-y-6">
-        {roundNumbers.map((roundNum) => (
-          <div key={roundNum}>
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink/30">
-              {roundLabel(roundNum, rounds[roundNum])}
-            </p>
-            <div className="space-y-4">
-              {rounds[roundNum].map((m, i) => (
-                <MatchCard key={m.match_id} match={m} index={i} onScored={load} />
-              ))}
+        {roundNumbers.map((roundNum) => {
+          const roundMatches = rounds[roundNum]
+          const onCourt = roundMatches.filter((m) => m.on_court)
+          const queued = roundMatches.filter((m) => !m.on_court)
+          return (
+            <div key={roundNum}>
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink/30">
+                {roundLabel(roundNum, roundMatches)}
+              </p>
+              <div className="space-y-4">
+                {onCourt.map((m, i) => (
+                  <MatchCard key={m.match_id} match={m} index={i} onScored={load} />
+                ))}
+              </div>
+              {queued.length > 0 && (
+                <div className="mt-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink/30">
+                    Up next — waiting for a court
+                  </p>
+                  <div className="space-y-4">
+                    {queued.map((m, i) => (
+                      <MatchCard key={m.match_id} match={m} index={onCourt.length + i} onScored={load} queued />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {losersFinalMatch && (
           <div>
             <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink/30">Losers Final</p>
-            <MatchCard match={losersFinalMatch} index={0} onScored={load} />
+            <MatchCard match={losersFinalMatch} index={0} onScored={load} queued={!losersFinalMatch.on_court} />
           </div>
         )}
       </div>
@@ -174,7 +201,7 @@ const STAGE_LABEL = {
   losers_final: 'Losers Final',
 }
 
-function MatchCard({ match, index, onScored }) {
+function MatchCard({ match, index, onScored, queued = false }) {
   const teamA = match.match_players.filter((mp) => mp.team === 'A')
   const teamB = match.match_players.filter((mp) => mp.team === 'B')
   const isBye = teamB.length === 0
@@ -185,7 +212,7 @@ function MatchCard({ match, index, onScored }) {
   const [editing, setEditing] = useState(false)
 
   const played = match.status === 'completed'
-  const showForm = !isBye && (!played || editing)
+  const showForm = !isBye && !queued && (!played || editing)
 
   async function submit(e) {
     e.preventDefault()
@@ -210,14 +237,14 @@ function MatchCard({ match, index, onScored }) {
   }
 
   return (
-    <div className="card p-5">
+    <div className={`card p-5 ${queued ? 'opacity-60' : ''}`}>
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-wide text-ink/40">
           {STAGE_LABEL[match.stage] && match.stage !== 'bracket' && match.stage !== 'main'
             ? STAGE_LABEL[match.stage]
             : `Match ${index + 1}`}
         </p>
-        {played && !editing && !isBye && (
+        {played && !editing && !isBye && !queued && (
           <button
             className="text-xs font-semibold text-court hover:underline"
             onClick={() => {
@@ -245,7 +272,9 @@ function MatchCard({ match, index, onScored }) {
             <TeamLine names={teamB.map((p) => p.players.name)} won={match.winner === 'B'} align="right" />
           </div>
 
-          {showForm ? (
+          {queued ? (
+            <p className="mt-3 text-center text-sm text-ink/40">Waiting for a court to free up</p>
+          ) : showForm ? (
             <form onSubmit={submit} className="mt-4 flex items-center justify-center gap-3">
               <input
                 type="number"

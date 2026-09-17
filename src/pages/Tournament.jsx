@@ -15,6 +15,7 @@ export default function Tournament() {
   const [newPlayerName, setNewPlayerName] = useState('')
   const [tournamentName, setTournamentName] = useState('')
   const [format, setFormat] = useState('random') // 'random' | 'playoffs'
+  const [courtCount, setCourtCount] = useState(2)
   const [teams, setTeams] = useState(null) // null until randomized
   const [benched, setBenched] = useState([]) // players sitting out this tournament
   const [creating, setCreating] = useState(false)
@@ -123,6 +124,7 @@ export default function Tournament() {
         status: 'active',
         format,
         bye_player_ids: byeIds,
+        court_count: courtCount,
       })
       .select()
       .single()
@@ -133,10 +135,15 @@ export default function Tournament() {
       return
     }
 
-    for (const { teamA, teamB } of pairedMatches) {
+    for (const [i, { teamA, teamB }] of pairedMatches.entries()) {
       const { data: match, error: mErr } = await supabase
         .from('matches')
-        .insert({ tournament_id: tournament.tournament_id, round: 1, status: 'pending' })
+        .insert({
+          tournament_id: tournament.tournament_id,
+          round: 1,
+          status: 'pending',
+          on_court: i < courtCount,
+        })
         .select()
         .single()
       if (mErr) { setError(mErr.message); continue }
@@ -205,6 +212,22 @@ export default function Tournament() {
                 (winners vs winners) and, if you want, a Losers Final.
               </p>
             )}
+          </div>
+
+          <div>
+            <label className="label">Courts available</label>
+            <input
+              type="number"
+              min={1}
+              className="input mt-1 w-24"
+              value={courtCount}
+              onChange={(e) => setCourtCount(Math.max(1, Number(e.target.value) || 1))}
+            />
+            <p className="mt-1.5 text-xs text-ink/40">
+              Only this many matches will be active at once. As soon as one finishes, the next
+              queued match automatically becomes playable — no need to wait for everyone to finish
+              before starting more.
+            </p>
           </div>
 
           <div>

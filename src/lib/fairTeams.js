@@ -52,12 +52,64 @@ export async function fetchFairnessData(supabase, groupId) {
   return { gamesPlayed, partnerCounts }
 }
 
+// Partitions the playing pool into teams of 2, trying to eliminate
+// repeat partnerships entirely rather than just reduce them.
+//
+// A simple left-to-right greedy pick (pair player 1 with whoever they've
+// played with least, then move on) can accidentally box in a later
+// player so their only remaining options have all been their partners
+// before — even when a different overall arrangement would have let
+// everyone avoid a repeat. This does a real search instead: at each
+// step it tries the least-repeated candidate first, and backtracks if
+// that choice turns out to make a later pairing worse than the best
+// found so far. Because it always tries the best option first, it finds
+// a zero-repeat arrangement almost immediately whenever one exists, and
+// otherwise settles for the arrangement with the fewest total repeats.
+function findBestPairing(players, partnerCounts) {
+  const pairKey = (a, b) => [a, b].sort().join('|')
+
+  let best = null
+  let bestScore = Infinity
+  let attempts = 0
+  const MAX_ATTEMPTS = 200000 // safety cap so a pathological input can't hang the browser
+
+  function recurse(remaining, current, score) {
+    attempts++
+    if (bestScore === 0 || attempts > MAX_ATTEMPTS) return bestScore === 0
+    if (score >= bestScore) return false
+
+    if (remaining.length === 0) {
+      best = current.map((t) => [...t])
+      bestScore = score
+      return score === 0
+    }
+
+    const [p1, ...rest] = remaining
+    const candidates = rest
+      .map((p2) => ({ p2, count: partnerCounts.get(pairKey(p1.player_id, p2.player_id)) || 0 }))
+      .sort((a, b) => a.count - b.count)
+
+    for (const { p2, count } of candidates) {
+      const nextRemaining = rest.filter((p) => p !== p2)
+      current.push([p1, p2])
+      const solved = recurse(nextRemaining, current, score + count)
+      current.pop()
+      if (solved) return true
+    }
+    return false
+  }
+
+  recurse(players, [], 0)
+  return best || []
+}
+
 // Given the selected players and their fairness history, decides:
 //   1. Who sits out this tournament (benched) — whoever has played the
 //      MOST games so far, just enough of them to leave a clean multiple
 //      of 4 players (so every team gets a full match, no leftover team).
-//   2. How to pair the rest into teams — greedily partnering each player
-//      with whoever they've played WITH the fewest times before.
+//   2. How to pair the rest into teams — searching for the arrangement
+//      with the fewest repeat partnerships (zero, whenever possible),
+//      not just a locally-good greedy guess.
 //
 // Ties (equal games played, equal partner history) are broken randomly,
 // so the algorithm doesn't always pick the same players/pairs when stats
@@ -82,24 +134,7 @@ export function assignFairTeams(selectedPlayers, gamesPlayed = new Map(), partne
   const benched = bySeniority.slice(0, benchCount)
   const playing = shuffle(bySeniority.slice(benchCount))
 
-  const pairKey = (a, b) => [a, b].sort().join('|')
-
-  const teams = []
-  const remaining = [...playing]
-  while (remaining.length >= 2) {
-    const p1 = remaining.shift()
-    let bestIdx = 0
-    let bestCount = Infinity
-    for (let i = 0; i < remaining.length; i++) {
-      const count = partnerCounts.get(pairKey(p1.player_id, remaining[i].player_id)) || 0
-      if (count < bestCount) {
-        bestCount = count
-        bestIdx = i
-      }
-    }
-    const [p2] = remaining.splice(bestIdx, 1)
-    teams.push([p1, p2])
-  }
+  const teams = findBestPairing(playing, partnerCounts)
 
   return { teams, benched }
 }
