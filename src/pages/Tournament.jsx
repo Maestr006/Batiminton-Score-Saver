@@ -119,10 +119,12 @@ export default function Tournament() {
     setError('')
     setRandomizing(true)
     const { gamesPlayed, partnerCounts } = await fetchFairnessData(supabase, currentGroup.group_id)
+    const lastBenchedIds = new Set(tournaments[0]?.bye_player_ids || [])
     const { teams: generatedTeams, benched: benchedPlayers } = assignFairTeams(
       chosen,
       gamesPlayed,
-      partnerCounts
+      partnerCounts,
+      lastBenchedIds
     )
     setRandomizing(false)
 

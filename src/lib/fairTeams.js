@@ -104,17 +104,30 @@ function findBestPairing(players, partnerCounts) {
 }
 
 // Given the selected players and their fairness history, decides:
-//   1. Who sits out this tournament (benched) — whoever has played the
-//      MOST games so far, just enough of them to leave a clean multiple
-//      of 4 players (so every team gets a full match, no leftover team).
+//   1. Who sits out this tournament (benched). Priority order:
+//        a. Players who've already partnered with EVERY other selected
+//           player at least once ("graduated") and weren't benched last
+//           time — they've gotten full rotation value, so resting them
+//           makes room for people who still have partners left to try.
+//        b. Graduated players who WERE benched last time — still
+//           reasonable to rest again, but only once there's no fresher
+//           graduate available, so nobody sits out two tournaments in a
+//           row unless it's truly unavoidable.
+//        c. Anyone who hasn't graduated yet — sorted by games played
+//           descending, same fallback as before. These are the last
+//           resort, since benching them would stall their rotation.
 //   2. How to pair the rest into teams — searching for the arrangement
 //      with the fewest repeat partnerships (zero, whenever possible),
 //      not just a locally-good greedy guess.
 //
-// Ties (equal games played, equal partner history) are broken randomly,
-// so the algorithm doesn't always pick the same players/pairs when stats
-// are equal.
-export function assignFairTeams(selectedPlayers, gamesPlayed = new Map(), partnerCounts = new Map()) {
+// Ties within a tier are broken randomly, so the algorithm doesn't
+// always pick the same players when stats are equal.
+export function assignFairTeams(
+  selectedPlayers,
+  gamesPlayed = new Map(),
+  partnerCounts = new Map(),
+  lastBenchedIds = new Set()
+) {
   const shuffle = (arr) => {
     const a = [...arr]
     for (let i = a.length - 1; i > 0; i--) {
@@ -124,15 +137,33 @@ export function assignFairTeams(selectedPlayers, gamesPlayed = new Map(), partne
     return a
   }
 
-  // Shuffle first so equal-games ties break randomly, then sort
-  // most-played-first — those are the ones we'll bench if we need to.
-  const bySeniority = shuffle(selectedPlayers).sort(
-    (a, b) => (gamesPlayed.get(b.player_id) || 0) - (gamesPlayed.get(a.player_id) || 0)
-  )
+  const pairKey = (a, b) => [a, b].sort().join('|')
 
-  const benchCount = bySeniority.length % 4
-  const benched = bySeniority.slice(0, benchCount)
-  const playing = shuffle(bySeniority.slice(benchCount))
+  const hasPartneredWithAll = (player) =>
+    selectedPlayers.length > 1 &&
+    selectedPlayers.every(
+      (other) =>
+        other.player_id === player.player_id ||
+        (partnerCounts.get(pairKey(player.player_id, other.player_id)) || 0) > 0
+    )
+
+  const tiered = shuffle(selectedPlayers).map((p) => {
+    const graduated = hasPartneredWithAll(p)
+    const benchedLastTime = lastBenchedIds.has(p.player_id)
+    const tier = graduated ? (benchedLastTime ? 1 : 0) : 2
+    return { p, tier, games: gamesPlayed.get(p.player_id) || 0 }
+  })
+
+  tiered.sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier
+    if (a.tier === 2) return b.games - a.games // fallback: most-played first
+    return 0 // graduated tiers are already shuffled — keep random order
+  })
+
+  const ordered = tiered.map((t) => t.p)
+  const benchCount = ordered.length % 4
+  const benched = ordered.slice(0, benchCount)
+  const playing = shuffle(ordered.slice(benchCount))
 
   const teams = findBestPairing(playing, partnerCounts)
 
