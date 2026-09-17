@@ -2,6 +2,27 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 
+// Looks at all of a tournament's pending matches and, if fewer than
+// court_count are currently marked on_court, promotes the earliest
+// queued ones to fill the gap. Acts as a client-side safety net on top
+// of the database trigger, so a court frees up the moment ANY single
+// active match finishes — not only once every active match has.
+async function reconcileCourts(matches, courtCount) {
+  const activePending = matches.filter((m) => m.on_court && m.status === 'pending')
+  const queued = matches
+    .filter((m) => !m.on_court && m.status === 'pending')
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+  const freeSlots = courtCount - activePending.length
+  if (freeSlots <= 0 || queued.length === 0) return false
+
+  const toPromote = queued.slice(0, freeSlots)
+  await Promise.all(
+    toPromote.map((m) => supabase.from('matches').update({ on_court: true }).eq('match_id', m.match_id))
+  )
+  return true
+}
+
 export default function TournamentDetail() {
   const { tournamentId } = useParams()
   const [tournament, setTournament] = useState(null)
@@ -20,7 +41,22 @@ export default function TournamentDetail() {
         .order('created_at'),
     ])
     setTournament(t)
-    setMatches(m || [])
+
+    let matchesData = m || []
+    if (t && matchesData.length > 0) {
+      const promoted = await reconcileCourts(matchesData, t.court_count)
+      if (promoted) {
+        const { data: fresh } = await supabase
+          .from('matches')
+          .select('*, match_players(*, players(name))')
+          .eq('tournament_id', tournamentId)
+          .order('round')
+          .order('created_at')
+        matchesData = fresh || matchesData
+      }
+    }
+    setMatches(matchesData)
+
     if (t?.bye_player_ids?.length) {
       const { data: bp } = await supabase
         .from('players')
