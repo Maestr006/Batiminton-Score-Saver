@@ -22,6 +22,7 @@ export default function Tournament() {
   const [randomizing, setRandomizing] = useState(false)
   const [error, setError] = useState('')
   const [showWizard, setShowWizard] = useState(false)
+  const [selectionInitialized, setSelectionInitialized] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!currentGroup) return
@@ -43,12 +44,53 @@ export default function Tournament() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  // Pre-check whoever played (or sat out) in the most recent tournament,
+  // since it's usually mostly the same people showing up again. Only
+  // runs once, so it never overwrites a selection you've made yourself.
+  useEffect(() => {
+    if (selectionInitialized || players.length === 0) return
+    if (tournaments.length === 0) {
+      setSelectionInitialized(true)
+      return
+    }
+    async function loadLastSelection() {
+      const last = tournaments[0]
+      const { data: lastMatches } = await supabase
+        .from('matches')
+        .select('match_players(player_id)')
+        .eq('tournament_id', last.tournament_id)
+
+      const ids = new Set()
+      for (const m of lastMatches || []) {
+        for (const mp of m.match_players || []) ids.add(mp.player_id)
+      }
+      for (const id of last.bye_player_ids || []) ids.add(id)
+
+      const validIds = new Set(players.map((p) => p.player_id))
+      setSelected(new Set([...ids].filter((id) => validIds.has(id))))
+      setSelectionInitialized(true)
+    }
+    loadLastSelection()
+  }, [tournaments, players, selectionInitialized])
+
   function togglePlayer(id) {
     setSelected((prev) => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+    setTeams(null)
+    setBenched([])
+  }
+
+  function selectAll() {
+    setSelected(new Set(players.map((p) => p.player_id)))
+    setTeams(null)
+    setBenched([])
+  }
+
+  function selectNone() {
+    setSelected(new Set())
     setTeams(null)
     setBenched([])
   }
@@ -231,7 +273,13 @@ export default function Tournament() {
           </div>
 
           <div>
-            <label className="label">Select players</label>
+            <div className="flex items-center justify-between">
+              <label className="label">Select players</label>
+              <div className="flex gap-3 text-xs font-semibold text-court">
+                <button type="button" onClick={selectAll} className="hover:underline">Select all</button>
+                <button type="button" onClick={selectNone} className="hover:underline">Select none</button>
+              </div>
+            </div>
             <div className="mt-2 flex flex-wrap gap-2">
               {players.map((p) => (
                 <button
@@ -268,7 +316,17 @@ export default function Tournament() {
 
           {teams && (
             <div>
-              <p className="label mb-2">Matchups</p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="label">Matchups</p>
+                <button
+                  type="button"
+                  onClick={handleRandomize}
+                  disabled={randomizing}
+                  className="text-xs font-semibold text-court hover:underline disabled:opacity-50"
+                >
+                  {randomizing ? 'Regenerating…' : '🔁 Regenerate'}
+                </button>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {pairTeamsIntoMatches(teams).matches.map((m, i) => (
                   <div key={i} className="card p-4">
